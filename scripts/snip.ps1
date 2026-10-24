@@ -37,6 +37,29 @@ namespace SnipNative {
 '@
 
 [void][SnipNative.Win]::SetProcessDPIAware()
+$dir = Join-Path $env:USERPROFILE '.dsh\dsh-snip'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+function Escape-JsonAscii([string]$json) {
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($ch in $json.ToCharArray()) {
+    if ([int]$ch -gt 127) {
+      [void]$sb.Append(('\u' + ([int]$ch).ToString('x4')))
+    } else {
+      [void]$sb.Append($ch)
+    }
+  }
+  return $sb.ToString()
+}
+
+function Write-RunState([string]$status, $extra) {
+  try {
+    $obj = @{ status = $status; t = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() }
+    if ($extra) { foreach ($k in $extra.Keys) { $obj[$k] = $extra[$k] } }
+    $text = Escape-JsonAscii ($obj | ConvertTo-Json -Compress -Depth 4)
+    [IO.File]::WriteAllText((Join-Path $dir 'run.json'), $text, (New-Object System.Text.UTF8Encoding $false))
+  } catch { }
+}
 
 function Out-Json($object) {
   $json = $object | ConvertTo-Json -Compress -Depth 4
@@ -64,13 +87,12 @@ function Escape-JsonAscii([string]$json) {
 }
 
 function Fail($message) {
+  Write-RunState 'failed' @{ error = [string]$message }
   Out-Json @{ ok = $false; error = [string]$message }
   exit 0
 }
 
 # ── 输出路径 ─────────────────────────────────────────────────
-$dir = Join-Path $env:USERPROFILE '.dsh\dsh-snip'
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
 if (-not $Out) {
   $Out = Join-Path $dir ("snip-" + [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff') + ".png")
 }
@@ -182,6 +204,7 @@ try {
     $form.Dispose()
 
     if ($script:cancelled) {
+      Write-RunState 'cancelled' $null
       Out-Json @{ ok = $false; cancelled = $true; error = '已取消（ESC）' }
       exit 0
     }
@@ -190,6 +213,7 @@ try {
     $w = [Math]::Abs($script:curPt.X - $script:startPt.X)
     $h = [Math]::Abs($script:curPt.Y - $script:startPt.Y)
     if ($w -lt 4 -or $h -lt 4) {
+      Write-RunState 'cancelled' @{ error = '选区太小' }
       Out-Json @{ ok = $false; cancelled = $true; error = '选区太小（单击未拖动）' }
       exit 0
     }
@@ -216,6 +240,7 @@ try {
     ok = $true; path = $info.FullName; x = $x; y = $y; width = $w; height = $h
     bytes = $info.Length; t = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
   }
+  Write-RunState 'done' @{ path = $info.FullName; width = $w; height = $h }
   $lastText = Escape-JsonAscii ($record | ConvertTo-Json -Compress -Depth 3)
   [IO.File]::WriteAllText($lastJson, $lastText, (New-Object System.Text.UTF8Encoding $false))
   Out-Json $record
