@@ -1,0 +1,65 @@
+{
+  "name": "dsh-snip",
+  "version": "0.1.0",
+  "description": "快速截图：输入框旁一键框选截图（自动隐藏 DSH 窗口），图片直接进剪贴板 Ctrl+V 即贴，模型可用 last_screenshot 工具读图分析 / Quick region screenshot for DeepSeek Harness: snip UI + clipboard image + MCP tool",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "screenshot",
+    "snip",
+    "capture",
+    "mcp",
+    "productivity"
+  ],
+  "author": {
+    "name": "hezhaochao"
+  },
+  "homepage": "https://github.com/hezhaochao/dsh-snip#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hezhaochao/dsh-snip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hezhaochao/dsh-snip/issues"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./server": "./mcp/server.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "mcp",
+    "scripts",
+    "test",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/mcp.test.mjs",
+    "test:snip": "powershell -NoProfile -STA -ExecutionPolicy Bypass -File test/snip.tests.ps1"
+  },
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.2 || >=0.2.0-rc.2"
+  }
+}

@@ -1,0 +1,10 @@
+# dsh-snip — DSH bundle patch 层
+#
+# 一行 cordis 条目挂起本包的宿主半边（lib/index.js）：
+#   1. 注册 /dsh-snip/start 路由（拉起框选截图，PNG 进剪贴板）
+#   2. 挂载 MCP 桥接，模型拿到 last_screenshot 工具
+#   3. 客户端「📸 截图」按钮出现在输入框旁
+
+- insert:
+    - id: snip-button
+      name: 'dsh-snip'
