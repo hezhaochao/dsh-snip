@@ -144,20 +144,20 @@ try {
   }
 
   # ════════════ 交互模式：微信/QQ 式框选 ════════════
-  $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  $script:vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
 
   # 1) 冻结屏幕：先抓一张全屏作为遮罩的背景图（视觉上屏幕被冻住）
-  $frozen = New-Object System.Drawing.Bitmap($vs.Width, $vs.Height)
+  $script:frozen = New-Object System.Drawing.Bitmap($script:vs.Width, $script:vs.Height)
   $fg = [System.Drawing.Graphics]::FromImage($frozen)
-  try { $fg.CopyFromScreen($vs.X, $vs.Y, 0, 0, $frozen.Size) }
+  try { $fg.CopyFromScreen($script:vs.X, $script:vs.Y, 0, 0, $script:frozen.Size) }
   finally { $fg.Dispose() }
 
   # 2) 全屏无边框窗体：背景 = 冻结画面
   $form = New-Object System.Windows.Forms.Form
   $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
   $form.StartPosition = 'Manual'
-  $form.Location = New-Object System.Drawing.Point($vs.X, $vs.Y)
-  $form.Size = New-Object System.Drawing.Size($vs.Width, $vs.Height)
+  $form.Location = New-Object System.Drawing.Point($script:vs.X, $script:vs.Y)
+  $form.Size = New-Object System.Drawing.Size($script:vs.Width, $script:vs.Height)
   $form.TopMost = $true
   $form.ShowInTaskbar = $false
   $form.Cursor = [System.Windows.Forms.Cursors]::Cross
@@ -171,15 +171,6 @@ try {
   $script:confirmed = $false
   $script:cancelled = $false
   $script:selRect = [System.Drawing.Rectangle]::Empty   # 最终选区（窗体坐标 = 虚拟屏坐标）
-
-  function Get-SelRect {
-    if (-not $script:dragging) { return $script:selRect }
-    $rx = [Math]::Min($script:startPt.X, $script:curPt.X)
-    $ry = [Math]::Min($script:startPt.Y, $script:curPt.Y)
-    $rw = [Math]::Abs($script:curPt.X - $script:startPt.X)
-    $rh = [Math]::Abs($script:curPt.Y - $script:startPt.Y)
-    return (New-Object System.Drawing.Rectangle($rx, $ry, $rw, $rh))
-  }
 
   $form.add_KeyDown({
     param($s, $e)
@@ -212,18 +203,22 @@ try {
     param($s, $e)
     if ($script:dragging -and $e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
       $script:dragging = $false
-      $r = Get-SelRect
-      if ($r.Width -ge 10 -and $r.Height -ge 10) {
-        $script:selRect = $r
-        $form.Invalidate()
-        Show-ConfirmBar $r $form
+      $rx = [Math]::Min($script:startPt.X, $script:curPt.X)
+      $ry = [Math]::Min($script:startPt.Y, $script:curPt.Y)
+      $rw = [Math]::Abs($script:curPt.X - $script:startPt.X)
+      $rh = [Math]::Abs($script:curPt.Y - $script:startPt.Y)
+      if ($rw -ge 10 -and $rh -ge 10) {
+        $script:selRect = New-Object System.Drawing.Rectangle($rx, $ry, $rw, $rh)
+        $s.Invalidate()
+        & $script:ShowConfirmBar $script:selRect $s
       } else {
         # 误触（拖拽太小）：忽略，继续等待真正的框选
         $script:selRect = [System.Drawing.Rectangle]::Empty
-        $form.Invalidate()
+        $s.Invalidate()
       }
     }
   })
+
   $form.add_MouseDoubleClick({
     param($s, $e)
     if (-not $script:selRect.IsEmpty) {
@@ -233,47 +228,56 @@ try {
   })
   $form.add_Paint({
     param($s, $e)
-    $g = $e.Graphics
-    $r = Get-SelRect
-    if ($r.Width -ge 2 -and $r.Height -ge 2) {
-      # 选区外压暗（四块矩形），选区保持明亮
+    try {
+      $g = $e.Graphics
+      $r = $script:selRect
+      if (-not $script:dragging -and ($r.IsEmpty -or $r.Width -lt 2 -or $r.Height -lt 2)) {
+        $tip = "按住左键拖拽框选截图区域 · ESC 取消"
+        $font = New-Object System.Drawing.Font('Microsoft YaHei', 11)
+        $sz = $g.MeasureString($tip, $font)
+        $lx = [int](($s.ClientSize.Width - $sz.Width) / 2)
+        $bg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(190, 24, 26, 34))
+        $fgb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 235, 240, 250))
+        $g.FillRectangle($bg, $lx, 18, $sz.Width + 24, $sz.Height + 10)
+        $g.DrawString($tip, $font, $fgb, ($lx + 12), 23)
+        $font.Dispose(); $bg.Dispose(); $fgb.Dispose()
+        return
+      }
+      $rx = [Math]::Min($script:startPt.X, $script:curPt.X)
+      $ry = [Math]::Min($script:startPt.Y, $script:curPt.Y)
+      $rw = [Math]::Abs($script:curPt.X - $script:startPt.X)
+      $rh = [Math]::Abs($script:curPt.Y - $script:startPt.Y)
+      if ($rw -lt 2 -or $rh -lt 2) { return }
+      $r = New-Object System.Drawing.Rectangle($rx, $ry, $rw, $rh)
       $dark = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(110, 10, 12, 18))
-      $vw = $form.ClientSize.Width; $vh = $form.ClientSize.Height
+      $vw = $s.ClientSize.Width; $vh = $s.ClientSize.Height
       $g.FillRectangle($dark, 0, 0, $vw, $r.Top)
       $g.FillRectangle($dark, 0, $r.Bottom, $vw, $vh - $r.Bottom)
       $g.FillRectangle($dark, 0, $r.Top, $r.Left, $r.Height)
       $g.FillRectangle($dark, $r.Right, $r.Top, $vw - $r.Right, $r.Height)
       $dark.Dispose()
-      # 选区边框 + 尺寸提示
-      $pen = New-Object System.Drawing.Pen($ACCENT, 2)
+      $pen = New-Object System.Drawing.Pen($script:ACCENT, 2)
       $g.DrawRectangle($pen, $r)
       $pen.Dispose()
-      $label = "" + $r.Width + " × " + $r.Height
-      $font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
-      $sz = $g.MeasureString($label, $font)
+      $label = [string]$r.Width + " x " + $r.Height
+      $font2 = New-Object System.Drawing.Font('Microsoft YaHei', 9)
+      $sz = $g.MeasureString($label, $font2)
       $lx = [Math]::Min($r.Left, $vw - $sz.Width - 12)
       $ly = if ($r.Top -gt $sz.Height + 10) { $r.Top - $sz.Height - 6 } else { $r.Bottom + 6 }
-      $bg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200, 24, 26, 34))
+      $bg2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200, 24, 26, 34))
       $fgb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 120, 190, 255))
-      $g.FillRectangle($bg, $lx, $ly, $sz.Width + 10, $sz.Height + 4)
-      $g.DrawString($label, $font, $fgb, ($lx + 5), ($ly + 2))
-      $font.Dispose(); $bg.Dispose(); $fgb.Dispose()
-    } else {
-      # 尚未框选：顶部提示条
-      $tip = "按住左键拖拽框选截图区域 · ESC 取消"
-      $font = New-Object System.Drawing.Font('Microsoft YaHei', 11)
-      $sz = $g.MeasureString($tip, $font)
-      $lx = [int](($form.ClientSize.Width - $sz.Width) / 2)
-      $bg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(190, 24, 26, 34))
-      $fgb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 235, 240, 250))
-      $g.FillRectangle($bg, $lx, 18, $sz.Width + 24, $sz.Height + 10)
-      $g.DrawString($tip, $font, $fgb, ($lx + 12), 23)
-      $font.Dispose(); $bg.Dispose(); $fgb.Dispose()
+      $g.FillRectangle($bg2, $lx, $ly, $sz.Width + 10, $sz.Height + 4)
+      $g.DrawString($label, $font2, $fgb, ($lx + 5), ($ly + 2))
+      $font2.Dispose(); $bg2.Dispose(); $fgb.Dispose()
+    } catch {
+      # 绘制失败绝不能拖垮整个遮罩窗体
+      try { $e.Graphics.Clear([System.Drawing.Color]::FromArgb(200, 10, 12, 18)) } catch { }
     }
   })
 
-  # QQ 式确认工具条：选区旁的「确认 / 取消」小窗
-  function Show-ConfirmBar([System.Drawing.Rectangle]$r, [System.Windows.Forms.Form]$owner) {
+  # QQ 式确认工具条：存为 script 变量，事件处理器里用 & $script:ShowConfirmBar 调用
+  $script:ShowConfirmBar = {
+    param([System.Drawing.Rectangle]$r, [System.Windows.Forms.Form]$owner)
     $bar = New-Object System.Windows.Forms.Form
     $bar.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $bar.StartPosition = 'Manual'
@@ -281,7 +285,6 @@ try {
     $bar.ShowInTaskbar = $false
     $bar.Size = New-Object System.Drawing.Size(132, 36)
     $bar.BackColor = [System.Drawing.Color]::FromArgb(24, 26, 34)
-
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = '确认'
     $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -291,7 +294,6 @@ try {
     $ok.Size = New-Object System.Drawing.Size(60, 28)
     $ok.Location = New-Object System.Drawing.Point(6, 4)
     $bar.Controls.Add($ok)
-
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text = '取消'
     $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -301,14 +303,11 @@ try {
     $cancel.Size = New-Object System.Drawing.Size(60, 28)
     $cancel.Location = New-Object System.Drawing.Point(68, 4)
     $bar.Controls.Add($cancel)
-
-    # 位置：选区右下角，出屏则内收
     $bx = $r.Right - $bar.Width
     $by = $r.Bottom + 6
-    if ($bx -lt $vs.X + 4) { $bx = $vs.X + 4 }
-    if ($by + $bar.Height -gt $vs.Y + $vs.Height - 4) { $by = $r.Top - $bar.Height - 6 }
+    if ($bx -lt $script:vs.X + 4) { $bx = $script:vs.X + 4 }
+    if ($by + $bar.Height -gt $script:vs.Y + $script:vs.Height - 4) { $by = $r.Top - $bar.Height - 6 }
     $bar.Location = New-Object System.Drawing.Point($bx, $by)
-
     $result = $bar.ShowDialog($owner)
     $bar.Dispose()
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -332,9 +331,9 @@ try {
 
   # ── 从冻结画面裁剪选区 ──────────────────────────────────────
   $r = $script:selRect
-  $cap = New-Object System.Drawing.Rectangle($r.X, $r.Y, [Math]::Min($r.Width, $frozen.Width), [Math]::Min($r.Height, $frozen.Height))
-  $bmp = $frozen.Clone($cap, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-  $frozen.Dispose()
+  $cap = New-Object System.Drawing.Rectangle($r.X, $r.Y, [Math]::Min($r.Width, $script:frozen.Width), [Math]::Min($r.Height, $script:frozen.Height))
+  $bmp = $script:frozen.Clone($cap, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $script:frozen.Dispose()
   try {
     $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
     try { [System.Windows.Forms.Clipboard]::SetImage($bmp) } catch { }
