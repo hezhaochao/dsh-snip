@@ -145,6 +145,8 @@ try {
 
   # ════════════ 交互模式：微信/QQ 式框选 ════════════
   $script:vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  # 选框边线颜色（QQ/微信式蓝色）。曾经漏定义 → 画笔创建每帧抛异常 → 遮罩被 catch 清成一片纯色，选框永远出不来
+  $script:ACCENT = [System.Drawing.Color]::FromArgb(255, 45, 130, 240)
 
   # 1) 冻结屏幕：先抓一张全屏作为遮罩的背景图（视觉上屏幕被冻住）
   $script:frozen = New-Object System.Drawing.Bitmap($script:vs.Width, $script:vs.Height)
@@ -164,6 +166,13 @@ try {
   $form.KeyPreview = $true
   $form.BackgroundImage = $frozen
   $form.BackgroundImageLayout = 'None'
+  # 双缓冲（protected 属性，只能反射写）。没有它每次重绘都先整屏刷一遍白色 BackColor
+  # 再画背景图，拖选时就是肉眼可见的"按左键出现全屏白色"
+  try {
+    $dbProp = $form.GetType().GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]'Instance,NonPublic,Public')
+    $dbProp.SetValue($form, $true, $null)
+  } catch { }
+  $form.BackColor = [System.Drawing.Color]::FromArgb(24, 26, 34)   # 万一双缓冲没生效，闪的也是深色不是白色
 
   $script:startPt = [System.Drawing.Point]::Empty
   $script:curPt = [System.Drawing.Point]::Empty
@@ -259,6 +268,18 @@ try {
       $pen = New-Object System.Drawing.Pen($script:ACCENT, 2)
       $g.DrawRectangle($pen, $r)
       $pen.Dispose()
+      # 八个白色小方块手柄（QQ/微信式）
+      $hs = 8
+      $hnd = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+      $midX = $r.Left + [int]($r.Width / 2)
+      $midY = $r.Top + [int]($r.Height / 2)
+      foreach ($p in @(
+          @($r.Left, $r.Top), @($midX, $r.Top), @($r.Right, $r.Top),
+          @($r.Left, $midY), @($r.Right, $midY),
+          @($r.Left, $r.Bottom), @($midX, $r.Bottom), @($r.Right, $r.Bottom))) {
+        $g.FillRectangle($hnd, [int]($p[0] - $hs / 2), [int]($p[1] - $hs / 2), $hs, $hs)
+      }
+      $hnd.Dispose()
       $label = [string]$r.Width + " x " + $r.Height
       $font2 = New-Object System.Drawing.Font('Microsoft YaHei', 9)
       $sz = $g.MeasureString($label, $font2)
@@ -270,8 +291,8 @@ try {
       $g.DrawString($label, $font2, $fgb, ($lx + 5), ($ly + 2))
       $font2.Dispose(); $bg2.Dispose(); $fgb.Dispose()
     } catch {
-      # 绘制失败绝不能拖垮整个遮罩窗体
-      try { $e.Graphics.Clear([System.Drawing.Color]::FromArgb(200, 10, 12, 18)) } catch { }
+      # 绘制失败只能跳过这一帧剩余的绘制。绝不能 Clear——Clear 会把整张冻结画面
+      # 刷成一片纯色（真机踩过：ACCENT 未定义时每帧都走到这里，整屏被清掉）
     }
   })
 
@@ -303,10 +324,11 @@ try {
     $cancel.Size = New-Object System.Drawing.Size(60, 28)
     $cancel.Location = New-Object System.Drawing.Point(68, 4)
     $bar.Controls.Add($cancel)
-    $bx = $r.Right - $bar.Width
-    $by = $r.Bottom + 6
+    # bar 是独立窗体，要用屏幕绝对坐标；选区坐标是遮罩客户区坐标（原点=虚拟屏左上角）
+    $bx = $script:vs.X + $r.Right - $bar.Width
+    $by = $script:vs.Y + $r.Bottom + 6
     if ($bx -lt $script:vs.X + 4) { $bx = $script:vs.X + 4 }
-    if ($by + $bar.Height -gt $script:vs.Y + $script:vs.Height - 4) { $by = $r.Top - $bar.Height - 6 }
+    if ($by + $bar.Height -gt $script:vs.Y + $script:vs.Height - 4) { $by = $script:vs.Y + $r.Top - $bar.Height - 6 }
     $bar.Location = New-Object System.Drawing.Point($bx, $by)
     $result = $bar.ShowDialog($owner)
     $bar.Dispose()
