@@ -350,6 +350,7 @@ namespace DshSnip {
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
     [DllImport("user32.dll")] private static extern uint SendInput(uint n, INPUT[] inputs, int size);
     // 必须 CharSet.Unicode：默认绑定到 ANSI 版 Process32FirstA，UTF-16 进程名会被读成乱码，
     // "DeepSeek/Harness" 永远匹配不上，隐藏静默失效（真机踩过）
@@ -418,9 +419,14 @@ namespace DshSnip {
 
       try {
         SetProcessDPIAware();
+        IntPtr dsh = LocateDshWindow();       // 无论是否隐藏都要找 DSH：粘贴要把它带前台
         IntPtr hidden = IntPtr.Zero;
         try {
-          if (!noHide) hidden = HideDshWindow();
+          if (!noHide && dsh != IntPtr.Zero) {
+            ShowWindow(dsh, 0);               // SW_HIDE
+            Thread.Sleep(350);                // 等窗口真正消失并重绘
+            hidden = dsh;
+          }
 
           // 冻结屏幕：先抓一张全屏作为遮罩的背景图（视觉上屏幕被冻住）
           Rectangle vs = SystemInformation.VirtualScreen;
@@ -467,22 +473,18 @@ namespace DshSnip {
             + ",\"width\":" + rw + ",\"height\":" + rh + ",\"bytes\":" + bytes
             + ",\"t\":" + NowMs() + "}";
           try { File.WriteAllText(lastJson, record, new UTF8Encoding(false)); } catch { }
-          // 先恢复 DSH 前台，再让客户端感知 done（客户端会把焦点放回输入框），
-          // 最后延时发 Ctrl+V —— QQ 式"截完直接贴进输入框"
-          if (hidden != IntPtr.Zero) {
-            try {
-              ShowWindow(hidden, 5);          // SW_SHOW
-              SetForegroundWindow(hidden);
-            } catch { }
+          // 先把 DSH 带回前台，再让客户端感知 done（客户端会把焦点放回输入框），
+          // 最后延时发 Ctrl+V —— QQ 式"截完直接贴进输入框"。
+          // 与是否隐藏无关：保留窗口模式同样要前台+粘贴（v0.1.8 曾错误地只在隐藏模式粘贴）
+          if (dsh != IntPtr.Zero) {
+            SwitchToDsh(dsh);
           }
           WriteState("done", null);
           Emit(record);
-          if (hidden != IntPtr.Zero) {
-            Thread.Sleep(800);                // 留给客户端轮询(0.6s)把焦点放回输入框
-            try {
-              SetForegroundWindow(hidden);
-              SendCtrlV();
-            } catch { }
+          if (dsh != IntPtr.Zero) {
+            Thread.Sleep(1000);               // 留给客户端轮询(0.6s)把焦点放回输入框
+            SwitchToDsh(dsh);
+            SendCtrlV();
           }
           return 0;
         } finally {
@@ -500,11 +502,11 @@ namespace DshSnip {
       }
     }
 
-    // 沿父进程链找 DSH 主窗口并暂时隐藏（避免把 DSH 自己截进去），返回窗口句柄。
+    // 沿父进程链定位 DSH 主窗口（是否隐藏由调用方决定）。
     // Electron 宿主有多层同名进程（helper 不带窗口），名字匹配的祖先里取最靠根的
-    // 那个有可见窗口的——那才是主进程的主窗口。名字匹配不上就什么都不藏（fail-open），
+    // 那个有可见窗口的——那才是主进程的主窗口。名字匹配不上就返回零（fail-open），
     // 绝不能拿链条上的随机祖先（bash/explorer）下手。
-    private static IntPtr HideDshWindow() {
+    private static IntPtr LocateDshWindow() {
       try {
         Dictionary<int, int> parent = new Dictionary<int, int>();
         Dictionary<int, string> names = new Dictionary<int, string>();
@@ -538,10 +540,6 @@ namespace DshSnip {
           }
           pid = pp;
         }
-        if (best != IntPtr.Zero) {
-          ShowWindow(best, 0);             // SW_HIDE
-          Thread.Sleep(350);               // 等窗口真正消失并重绘
-        }
         return best;
       } catch { }
       return IntPtr.Zero;
@@ -551,6 +549,16 @@ namespace DshSnip {
       if (string.IsNullOrEmpty(nm)) return false;
       string l = nm.ToLowerInvariant();
       return l.Contains("deepseek") || l.Contains("harness") || l.Contains("zcode") || l.Contains("dsh");
+    }
+
+    // 把 DSH 强制带到前台。SetForegroundWindow 有前台锁（后台进程调用常静默失败），
+    // SwitchToThisWindow 是资源管理器任务栏切换用的同一入口，实测更可靠
+    private static void SwitchToDsh(IntPtr h) {
+      try {
+        ShowWindow(h, 5);                 // SW_SHOW（幂等：已可见时无副作用）
+        SwitchToThisWindow(h, true);
+        SetForegroundWindow(h);
+      } catch { }
     }
 
     // 真实键盘输入（SendInput）：把截图贴进 DSH 输入框。合成 JS 事件不可信会被网页忽略，
