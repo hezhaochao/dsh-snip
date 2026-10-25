@@ -65,11 +65,13 @@ dsh plugin --profile <你的 profile> add github:hezhaochao/dsh-snip
 
 ## 为什么能自动粘贴
 
-确认后交互层会把 DSH 强制带回前台（SwitchToThisWindow，与任务栏点击同一机制），
-等客户端把焦点放回输入框，再发一次**系统级 Ctrl+V（SendInput）**——网页安全沙箱
-拦不住真实的键盘输入，这正是 QQ/微信自动贴图用的同一套机制。无论"隐藏窗口"开关
-与否都会执行。粘贴偶尔没落上（焦点被别的控件抢走）时，图仍在剪贴板，手动 Ctrl+V
-即可。
+确认后客户端把**输入框的实时屏幕坐标**上报宿主，宿主拉起 `scripts/paste.ps1`：
+把 DSH 强制带回前台（SwitchToThisWindow，与任务栏点击同一机制）→ **原生点击输入框**
+（窗口隐藏/恢复会丢 DOM 焦点，必须真实点击才能拿到键盘焦点）→ 发一次**系统级
+Ctrl+V**——网页安全沙箱拦不住真实的键盘输入，这正是 QQ/微信自动贴图的同一套机制。
+键鼠模拟放在系统 powershell.exe 里执行而不是临时编译的 exe，避免被 Defender 行为
+启发式误杀。无论"隐藏窗口"开关与否都会执行；粘贴偶尔没落上时，图仍在剪贴板，
+手动 Ctrl+V 即可（`~/.dsh/dsh-snip/paste-debug.log` 记录了每一步，便于排查）。
 
 ## 给模型的两个 MCP 工具（`mcp__snip__<名>`）
 

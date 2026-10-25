@@ -351,7 +351,7 @@ namespace DshSnip {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
-    [DllImport("user32.dll")] private static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    // 键鼠模拟（自动粘贴）不在这里——见 scripts/paste.ps1，由宿主在截图完成后拉起
     // 必须 CharSet.Unicode：默认绑定到 ANSI 版 Process32FirstA，UTF-16 进程名会被读成乱码，
     // "DeepSeek/Harness" 永远匹配不上，隐藏静默失效（真机踩过）
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
@@ -360,24 +360,6 @@ namespace DshSnip {
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] private static extern int GetCurrentProcessId();
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct INPUT {
-      public uint type;          // 1 = INPUT_KEYBOARD
-      public KEYBDINPUT ki;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct KEYBDINPUT {
-      public ushort wVk;
-      public ushort wScan;
-      public uint dwFlags;
-      public uint time;
-      public IntPtr dwExtraInfo;
-    }
-
-    private const ushort VK_CONTROL = 0x11;
-    private const ushort VK_V = 0x56;
-    private const uint KEYEVENTF_KEYUP = 0x0002;
-    private const uint INPUT_KEYBOARD = 1;
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PROCESSENTRY32 {
       public int dwSize;
@@ -473,19 +455,14 @@ namespace DshSnip {
             + ",\"width\":" + rw + ",\"height\":" + rh + ",\"bytes\":" + bytes
             + ",\"t\":" + NowMs() + "}";
           try { File.WriteAllText(lastJson, record, new UTF8Encoding(false)); } catch { }
-          // 先把 DSH 带回前台，再让客户端感知 done（客户端会把焦点放回输入框），
-          // 最后延时发 Ctrl+V —— QQ 式"截完直接贴进输入框"。
-          // 与是否隐藏无关：保留窗口模式同样要前台+粘贴（v0.1.8 曾错误地只在隐藏模式粘贴）
+          // 把 DSH 立刻带回前台（体感）。自动粘贴由宿主拉起 scripts/paste.ps1 接手：
+          // 客户端上报输入框坐标 → paste.ps1 切前台+原生点击输入框+真实 Ctrl+V。
+          // 粘贴不放 exe 里——临时 exe 做键盘模拟容易被 Defender 行为启发式误杀（真机踩过）
           if (dsh != IntPtr.Zero) {
             SwitchToDsh(dsh);
           }
-          WriteState("done", null);
+          WriteState("done", null, rw, rh);
           Emit(record);
-          if (dsh != IntPtr.Zero) {
-            Thread.Sleep(1000);               // 留给客户端轮询(0.6s)把焦点放回输入框
-            SwitchToDsh(dsh);
-            SendCtrlV();
-          }
           return 0;
         } finally {
           if (hidden != IntPtr.Zero) {
@@ -551,7 +528,7 @@ namespace DshSnip {
       return l.Contains("deepseek") || l.Contains("harness") || l.Contains("zcode") || l.Contains("dsh");
     }
 
-    // 把 DSH 强制带到前台。SetForegroundWindow 有前台锁（后台进程调用常静默失败），
+    // 把 DSH 带回前台。SetForegroundWindow 有前台锁（后台进程调用常静默失败），
     // SwitchToThisWindow 是资源管理器任务栏切换用的同一入口，实测更可靠
     private static void SwitchToDsh(IntPtr h) {
       try {
@@ -561,24 +538,14 @@ namespace DshSnip {
       } catch { }
     }
 
-    // 真实键盘输入（SendInput）：把截图贴进 DSH 输入框。合成 JS 事件不可信会被网页忽略，
-    // 必须走系统级输入
-    private static void SendCtrlV() {
-      INPUT[] inputs = new INPUT[4];
-      inputs[0].type = INPUT_KEYBOARD; inputs[0].ki.wVk = VK_CONTROL;
-      inputs[1].type = INPUT_KEYBOARD; inputs[1].ki.wVk = VK_V;
-      inputs[2].type = INPUT_KEYBOARD; inputs[2].ki.wVk = VK_V; inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-      inputs[3].type = INPUT_KEYBOARD; inputs[3].ki.wVk = VK_CONTROL; inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-      SendInput(4, inputs, Marshal.SizeOf(typeof(INPUT)));
-    }
-
     private static long NowMs() {
       return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
     }
 
-    private static void WriteState(string status, string errorJsonEscaped) {
+    private static void WriteState(string status, string errorJsonEscaped, int width = 0, int height = 0) {
       try {
         string text = "{\"status\":\"" + status + "\",\"t\":" + NowMs();
+        if (width > 0 && height > 0) text += ",\"width\":" + width + ",\"height\":" + height;
         if (!string.IsNullOrEmpty(errorJsonEscaped)) text += ",\"error\":\"" + errorJsonEscaped + "\"";
         text += "}";
         File.WriteAllText(Path.Combine(dir, "run.json"), text, new UTF8Encoding(false));
