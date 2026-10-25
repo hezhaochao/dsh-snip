@@ -349,6 +349,8 @@ namespace DshSnip {
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern uint SendInput(uint n, INPUT[] inputs, int size);
     // 必须 CharSet.Unicode：默认绑定到 ANSI 版 Process32FirstA，UTF-16 进程名会被读成乱码，
     // "DeepSeek/Harness" 永远匹配不上，隐藏静默失效（真机踩过）
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
@@ -356,6 +358,25 @@ namespace DshSnip {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool Process32Next(IntPtr snap, ref PROCESSENTRY32 pe);
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] private static extern int GetCurrentProcessId();
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT {
+      public uint type;          // 1 = INPUT_KEYBOARD
+      public KEYBDINPUT ki;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT {
+      public ushort wVk;
+      public ushort wScan;
+      public uint dwFlags;
+      public uint time;
+      public IntPtr dwExtraInfo;
+    }
+
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_V = 0x56;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint INPUT_KEYBOARD = 1;
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PROCESSENTRY32 {
       public int dwSize;
@@ -446,13 +467,28 @@ namespace DshSnip {
             + ",\"width\":" + rw + ",\"height\":" + rh + ",\"bytes\":" + bytes
             + ",\"t\":" + NowMs() + "}";
           try { File.WriteAllText(lastJson, record, new UTF8Encoding(false)); } catch { }
+          // 先恢复 DSH 前台，再让客户端感知 done（客户端会把焦点放回输入框），
+          // 最后延时发 Ctrl+V —— QQ 式"截完直接贴进输入框"
+          if (hidden != IntPtr.Zero) {
+            try {
+              ShowWindow(hidden, 5);          // SW_SHOW
+              SetForegroundWindow(hidden);
+            } catch { }
+          }
           WriteState("done", null);
           Emit(record);
+          if (hidden != IntPtr.Zero) {
+            Thread.Sleep(800);                // 留给客户端轮询(0.6s)把焦点放回输入框
+            try {
+              SetForegroundWindow(hidden);
+              SendCtrlV();
+            } catch { }
+          }
           return 0;
         } finally {
           if (hidden != IntPtr.Zero) {
             try {
-              ShowWindow(hidden, 5);          // SW_SHOW
+              ShowWindow(hidden, 5);          // SW_SHOW（幂等兜底）
               SetForegroundWindow(hidden);
             } catch { }
           }
@@ -464,7 +500,10 @@ namespace DshSnip {
       }
     }
 
-    // 沿父进程链找 DSH 主窗口并暂时隐藏（避免把 DSH 自己截进去），返回窗口句柄
+    // 沿父进程链找 DSH 主窗口并暂时隐藏（避免把 DSH 自己截进去），返回窗口句柄。
+    // Electron 宿主有多层同名进程（helper 不带窗口），名字匹配的祖先里取最靠根的
+    // 那个有可见窗口的——那才是主进程的主窗口。名字匹配不上就什么都不藏（fail-open），
+    // 绝不能拿链条上的随机祖先（bash/explorer）下手。
     private static IntPtr HideDshWindow() {
       try {
         Dictionary<int, int> parent = new Dictionary<int, int>();
@@ -482,28 +521,47 @@ namespace DshSnip {
         CloseHandle(snap);
 
         int pid = GetCurrentProcessId();
-        for (int i = 0; i < 6; i++) {
+        IntPtr best = IntPtr.Zero;
+        for (int i = 0; i < 8; i++) {
           if (!parent.ContainsKey(pid)) break;
           int pp = parent[pid];
           if (pp <= 4) break;
           string nm = names.ContainsKey(pp) ? names[pp] : "";
-          if (nm.IndexOf("deepseek", StringComparison.OrdinalIgnoreCase) >= 0
-              || nm.IndexOf("harness", StringComparison.OrdinalIgnoreCase) >= 0) {
+          if (IsDshName(nm)) {
             try {
               Process p = Process.GetProcessById(pp);
               IntPtr h = p.MainWindowHandle;
-              if (h != IntPtr.Zero) {
-                ShowWindow(h, 0);              // SW_HIDE
-                Thread.Sleep(350);             // 等窗口真正消失并重绘
-                return h;
+              if (h != IntPtr.Zero && IsWindowVisible(h)) {
+                best = h;   // 越靠根越像主进程，覆盖前面的候选
               }
             } catch { }
-            return IntPtr.Zero;
           }
           pid = pp;
         }
+        if (best != IntPtr.Zero) {
+          ShowWindow(best, 0);             // SW_HIDE
+          Thread.Sleep(350);               // 等窗口真正消失并重绘
+        }
+        return best;
       } catch { }
       return IntPtr.Zero;
+    }
+
+    private static bool IsDshName(string nm) {
+      if (string.IsNullOrEmpty(nm)) return false;
+      string l = nm.ToLowerInvariant();
+      return l.Contains("deepseek") || l.Contains("harness") || l.Contains("zcode") || l.Contains("dsh");
+    }
+
+    // 真实键盘输入（SendInput）：把截图贴进 DSH 输入框。合成 JS 事件不可信会被网页忽略，
+    // 必须走系统级输入
+    private static void SendCtrlV() {
+      INPUT[] inputs = new INPUT[4];
+      inputs[0].type = INPUT_KEYBOARD; inputs[0].ki.wVk = VK_CONTROL;
+      inputs[1].type = INPUT_KEYBOARD; inputs[1].ki.wVk = VK_V;
+      inputs[2].type = INPUT_KEYBOARD; inputs[2].ki.wVk = VK_V; inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+      inputs[3].type = INPUT_KEYBOARD; inputs[3].ki.wVk = VK_CONTROL; inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+      SendInput(4, inputs, Marshal.SizeOf(typeof(INPUT)));
     }
 
     private static long NowMs() {

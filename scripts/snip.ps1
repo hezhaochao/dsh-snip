@@ -88,7 +88,7 @@ function Find-DshWindow {
       if (-not $proc) { return [IntPtr]::Zero }
       $parentPid = [int]$proc.ParentProcessId
       $parent = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
-      if ($parent -and $parent.ProcessName -match 'DeepSeek|Harness') {
+      if ($parent -and $parent.ProcessName -match 'DeepSeek|Harness|ZCode|dsh') {
         return $parent.MainWindowHandle
       }
       $pid0 = $parentPid
