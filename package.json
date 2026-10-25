@@ -1,6 +1,6 @@
 {
   "name": "dsh-snip",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "快速截图：输入框旁一键框选截图（自动隐藏 DSH 窗口），图片直接进剪贴板 Ctrl+V 即贴，模型可用 last_screenshot 工具读图分析 / Quick region screenshot for DeepSeek Harness: snip UI + clipboard image + MCP tool",
   "license": "MIT",
   "keywords": [
